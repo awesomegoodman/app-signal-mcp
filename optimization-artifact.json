@@ -1,0 +1,169 @@
+{
+  "version": "1.0",
+  "toolId": "512c9f1b-db6f-407d-a4d9-4a54189e0548",
+  "generatedAt": "2026-04-28T00:00:00Z",
+  "verticalAlphaResearch": {
+    "alphaCategories": [
+      {
+        "id": "live_chart_data",
+        "name": "Live Chart Data Advantage",
+        "description": "Apple RSS and Google Play chart rankings update continuously. Free LLMs have no access — any rank-based query is automatic high differentiation.",
+        "relevantMethods": ["get_breakout_apps", "get_category_leaders", "get_app_signal"],
+        "differentiationStrength": "high"
+      },
+      {
+        "id": "momentum_signal",
+        "name": "Computed Momentum Signal",
+        "description": "growth_signal (breakout/strong/moderate/stable/declining) is derived from rank delta + rating velocity. Does not exist in any raw App Store or Play Store API response.",
+        "relevantMethods": ["get_breakout_apps", "get_app_signal", "search_apps"],
+        "differentiationStrength": "high"
+      },
+      {
+        "id": "cross_platform_comparison",
+        "name": "Cross-Platform Unified Schema",
+        "description": "Same fields, same signal logic, same confidence tiers across iOS and Android. No public tool normalizes both stores into a single typed schema.",
+        "relevantMethods": ["search_apps", "get_breakout_apps"],
+        "differentiationStrength": "high"
+      },
+      {
+        "id": "install_scale",
+        "name": "Android Install Band Ground Truth",
+        "description": "Google's own install band labels pulled directly from Play Store pages — not modelled estimates. Free LLMs fabricate or cite years-old install counts.",
+        "relevantMethods": ["get_app_signal", "search_apps"],
+        "differentiationStrength": "high"
+      },
+      {
+        "id": "competitive_context",
+        "name": "Category Median Benchmarking",
+        "description": "Each result includes category_median_rating_velocity and relative_momentum, requiring a live corpus of category peers no free LLM has.",
+        "relevantMethods": ["get_category_leaders", "get_breakout_apps"],
+        "differentiationStrength": "medium"
+      }
+    ],
+    "crossToolOpportunities": [
+      {
+        "partnerTool": "VC/company intelligence tool (Crunchbase, PitchBook wrapper)",
+        "combinedInsight": "Get AppSignal breakout apps in a category, cross-reference with funding data to find unfunded breakout apps — acquisition targets or whitespace opportunities.",
+        "examplePrompt": "Which productivity apps are showing breakout signal on iOS but have raised less than $5M in funding?"
+      },
+      {
+        "partnerTool": "Web search / news tool",
+        "combinedInsight": "Correlate AppSignal momentum with recent press — breakout with no press = organic growth, breakout with press = PR-driven spike.",
+        "examplePrompt": "Are the current iOS health app breakouts driven by press coverage or organic growth?"
+      }
+    ],
+    "upstreamGaps": [
+      {
+        "gap": "SensorTower costs $25K/year with no agent-callable API. App Store Connect and Play Console are developer-only. No public API exists for competitive cross-platform momentum at query time.",
+        "howToolFills": "Per-query pricing at $0.10/response with a typed MCP schema — the only competitive app intelligence tool callable by an AI agent without an enterprise contract."
+      },
+      {
+        "gap": "Apple RSS gives chart position but no ratings. iTunes API gives ratings but no chart rank. No single official source combines both.",
+        "howToolFills": "Merges iTunes API + Apple RSS into one response with derived velocity and signal classification."
+      }
+    ]
+  },
+  "candidatePromptPool": [
+    {
+      "id": "p1",
+      "prompt": "Which meditation apps are gaining momentum on both iOS and Android right now?",
+      "alphaCategory": "cross_platform_comparison",
+      "expectedMethods": ["search_apps"],
+      "freeBaseline": { "differentiation": "high_differentiation", "whyItBeatsFree": "Free LLMs cite Calm/Headspace from stale training data with no momentum signal", "autoCalibrated": false },
+      "testResult": "pass"
+    },
+    {
+      "id": "p2",
+      "prompt": "What are the breakout apps in iOS productivity right now?",
+      "alphaCategory": "live_chart_data",
+      "expectedMethods": ["get_breakout_apps"],
+      "freeBaseline": { "differentiation": "high_differentiation", "whyItBeatsFree": "breakout classification requires live rank delta + velocity — impossible without live data", "autoCalibrated": false },
+      "testResult": "pass"
+    },
+    {
+      "id": "p3",
+      "prompt": "How does Spotify rank and trend on Android compared to other music apps in its category?",
+      "alphaCategory": "competitive_context",
+      "expectedMethods": ["get_app_signal", "get_category_leaders"],
+      "freeBaseline": { "differentiation": "high_differentiation", "whyItBeatsFree": "Free LLMs give 2023 rating counts, no rank delta, no category median", "autoCalibrated": true },
+      "testResult": "pass"
+    },
+    {
+      "id": "p4",
+      "prompt": "Show me the top 10 finance apps on iOS with their growth signals and category momentum.",
+      "alphaCategory": "competitive_context",
+      "expectedMethods": ["get_category_leaders"],
+      "freeBaseline": { "differentiation": "high_differentiation", "whyItBeatsFree": "Category median velocity requires a live corpus — free LLMs cannot compute relative_momentum", "autoCalibrated": false },
+      "testResult": "pass"
+    },
+    {
+      "id": "p5",
+      "prompt": "Which Android health apps have 100M+ installs and strong or better growth signal?",
+      "alphaCategory": "install_scale",
+      "expectedMethods": ["get_category_leaders"],
+      "freeBaseline": { "differentiation": "high_differentiation", "whyItBeatsFree": "Install counts are fabricated or years old in free LLMs; no growth signal possible", "autoCalibrated": false },
+      "testResult": "pass"
+    },
+    {
+      "id": "p6",
+      "prompt": "I'm building a budget tracker app. Who are my top iOS competitors and are any of them declining?",
+      "alphaCategory": "live_chart_data",
+      "expectedMethods": ["search_apps", "get_category_leaders"],
+      "freeBaseline": { "differentiation": "high_differentiation", "whyItBeatsFree": "Competitor list is stale; declining signal requires live data", "autoCalibrated": true },
+      "testResult": "pass"
+    },
+    {
+      "id": "p7",
+      "prompt": "What AI assistant apps are breaking out on Android right now and how do they compare to iOS?",
+      "alphaCategory": "cross_platform_comparison",
+      "expectedMethods": ["search_apps", "get_breakout_apps"],
+      "freeBaseline": { "differentiation": "high_differentiation", "whyItBeatsFree": "AI app landscape changes weekly; free LLM data is months old", "autoCalibrated": false },
+      "testResult": "pass"
+    },
+    {
+      "id": "p8",
+      "prompt": "Look up com.netflix.mediaclient on Android — install scale, growth signal, category comparison.",
+      "alphaCategory": "install_scale",
+      "expectedMethods": ["get_app_signal"],
+      "freeBaseline": { "differentiation": "high_differentiation", "whyItBeatsFree": "Netflix install band from free LLMs is a guess; no category comparison possible", "autoCalibrated": false },
+      "testResult": "pass"
+    }
+  ],
+  "dataQualityValidation": {
+    "level1": { "passed": true, "issues": [] },
+    "level2": {
+      "methodTested": "get_category_leaders",
+      "passed": true,
+      "issues": []
+    }
+  },
+  "latencyAudit": {
+    "methods": [
+      { "name": "get_app_signal",       "declaredLatency": "fast",    "actualLatency": "fast",    "verdict": "correct" },
+      { "name": "search_apps",          "declaredLatency": "fast",    "actualLatency": "fast",    "verdict": "correct" },
+      { "name": "get_breakout_apps",    "declaredLatency": "instant", "actualLatency": "instant", "verdict": "correct" },
+      { "name": "get_category_leaders", "declaredLatency": "instant", "actualLatency": "instant", "verdict": "correct" }
+    ],
+    "schemaCompleteness": "4/4 tools have complete outputSchema"
+  },
+  "optimizationRuns": [
+    { "iteration": 1, "passRate": "8/8" }
+  ],
+  "showcasePrompts": [
+    "Which meditation apps are gaining momentum on both iOS and Android right now?",
+    "What are the breakout apps in iOS productivity today?",
+    "Show me the top 10 finance apps on iOS with their growth signals and category momentum",
+    "Which Android health apps have 100M+ installs and strong or better growth signal?",
+    "I'm building a budget tracker — who are my top iOS competitors and are any of them declining?",
+    "What AI assistant apps are breaking out on Android and how do they compare to iOS?",
+    "Look up com.netflix.mediaclient on Android — install scale, growth signal, category comparison",
+    "How does Spotify trend on Android compared to other music apps in its category?"
+  ],
+  "signoff": {
+    "passRate": "8/8",
+    "highDifferentiationCount": 8,
+    "moderateDifferentiationCount": 0,
+    "lowDifferentiationCount": 0,
+    "overallStatus": "PASS"
+  }
+}
