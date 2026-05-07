@@ -1,5 +1,5 @@
 import type { AppSignal, GrowthSignal } from "./types.js";
-import { iosLookup, iosSearch, iosTopChart, iosCategoryChart } from "./ios.js";
+import { iosLookup, iosSearch, iosTopChart, iosCategoryChart, enrichCategoryContext } from "./ios.js";
 import { androidLookup, androidSearch, androidTopChart, androidCategoryChart } from "./android.js";
 import { meetsSignalThreshold, rankBySignal } from "./signals.js";
 
@@ -65,6 +65,9 @@ export async function searchApps(
     ...(android.status === "fulfilled" ? android.value : []),
   ];
 
+  // Enrich cross-platform competitive context across the combined result set
+  enrichCategoryContext(results);
+
   return rankBySignal(results).slice(0, limit);
 }
 
@@ -103,18 +106,15 @@ export async function getCategoryLeaders(
   if (platform === "android") {
     const specific = await androidCategoryChart(category.toUpperCase(), limit);
     if (specific.length > 0) return specific.slice(0, limit);
-
     const all = await androidTopChart(200);
-    return all
-      .filter(a => matchesCategory(a.category, category))
-      .slice(0, limit);
+    return all.filter(a => matchesCategory(a.category, category)).slice(0, limit);
   }
 
+  // iOS: use genre-specific RSS chart (Finance, Health, etc. have their own top charts)
   const specific = await iosCategoryChart(category, limit);
   if (specific.length > 0) return specific.slice(0, limit);
 
+  // Fallback: filter overall top chart
   const all = await iosTopChart(200);
-  return all
-    .filter(a => matchesCategory(a.category, category))
-    .slice(0, limit);
+  return all.filter(a => matchesCategory(a.category, category)).slice(0, limit);
 }

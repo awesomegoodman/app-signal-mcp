@@ -2,26 +2,31 @@ import { createRequire } from "module";
 import type { AppSignal } from "./types.js";
 import { Cache, recordSnapshot, getVelocity, getRankDelta } from "./cache.js";
 import { classifySignal, classifyConfidence, computeMomentum, categoryMedian } from "./signals.js";
-import { enrichCategoryContext } from "./ios.js"; // reuse enrichment
+import { enrichCategoryContext } from "./ios.js";
+
+// ── Import fix: google-play-scraper is ESM with a default export ──────────
+// require() returns { __esModule: true, default: { app, list, search, ... } }
+// Using .default is mandatory — without it, every method is undefined and
+// calls silently fail, returning empty objects (null installs, 0 ratings, etc.)
 
 const require = createRequire(import.meta.url);
-const gplay = require("google-play-scraper") as {
-  app: (opts: { appId: string; lang?: string; country?: string }) => Promise<GplayApp>;
+const gplay = require("google-play-scraper").default as {
+  app:    (opts: { appId: string; lang?: string; country?: string }) => Promise<GplayApp>;
   search: (opts: { term: string; num: number; lang?: string; country?: string }) => Promise<GplayApp[]>;
-  list: (opts: { collection: string; category?: string; num: number; country?: string }) => Promise<GplayApp[]>;
+  list:   (opts: { collection: string; category?: string; num: number; country?: string }) => Promise<GplayApp[]>;
   collection: { TOP_FREE: string };
-  category: Record<string, string>;
+  category:   Record<string, string>;
 };
 
 interface GplayApp {
-  appId:   string;
-  title:   string;
+  appId:     string;
+  title:     string;
   developer: string;
-  score:   number;
-  ratings: number;
-  installs: string;  // e.g. "1,000,000+"
-  genre:   string;
-  genreId: string;
+  score:     number;
+  ratings:   number;   // total rating count
+  installs:  string;   // e.g. "1,000,000+" (string label from Play Store)
+  genre:     string;   // category name
+  genreId:   string;
 }
 
 const TTL_LOOKUP = 6 * 60 * 60 * 1000;
@@ -30,12 +35,12 @@ const TTL_CHARTS = 60 * 60 * 1000;
 const lookupCache = new Cache<AppSignal>();
 const chartCache  = new Cache<AppSignal[]>();
 
-// ── Rate limiter: 1 req/sec to respect public scraping etiquette ──────────
+// ── Rate limiter: 1 req/sec ───────────────────────────────────────────────
 
 let lastRequestMs = 0;
 async function rateLimitedFetch<T>(fn: () => Promise<T>): Promise<T> {
   const wait = Math.max(0, 1000 - (Date.now() - lastRequestMs));
-  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  if (wait > 0) await new Promise(r => setTimeout(r, wait));
   lastRequestMs = Date.now();
   return fn();
 }
@@ -53,7 +58,7 @@ function buildAppSignal(app: GplayApp, rank: number | null, cacheKey: string): A
     platform:  "android",
     name:      app.title ?? "",
     developer: app.developer ?? "",
-    category:  app.genre ?? "Unknown",
+    category:  app.genre || app.genreId || "Unknown",
     rating: {
       score:        app.score ?? 0,
       total_count:  app.ratings ?? 0,
@@ -89,6 +94,9 @@ export async function androidLookup(appId: string): Promise<AppSignal | null> {
     const key = `android:${app.appId}`;
     recordSnapshot(key, { rating_count: app.ratings, rank: null, captured_at: Date.now() });
 
+    const chartVersion = lookupCache.get(key);
+    if (chartVersion) return chartVersion;
+
     const signal = buildAppSignal(app, null, key);
     lookupCache.set(cacheKey, signal, TTL_LOOKUP);
     return signal;
@@ -107,14 +115,17 @@ export async function androidSearch(term: string, limit: number): Promise<AppSig
       gplay.search({ term, num: Math.min(limit, 30), lang: "en", country: "us" })
     );
 
-    const signals = apps.map((app) => {
+    const signals = apps.map(app => {
       const key = `android:${app.appId}`;
       recordSnapshot(key, { rating_count: app.ratings, rank: null, captured_at: Date.now() });
+      const chartVersion = lookupCache.get(key);
+      if (chartVersion) return chartVersion;
       const signal = buildAppSignal(app, null, key);
       lookupCache.set(`android:${app.appId}`, signal, TTL_LOOKUP);
       return signal;
     });
 
+    enrichCategoryContext(signals);
     (lookupCache as Cache<unknown>).set(cacheKey, signals, TTL_LOOKUP);
     return signals;
   } catch {
