@@ -1,7 +1,7 @@
 import type { AppSignal, GrowthSignal } from "./types.js";
 import { iosLookup, iosSearch, iosTopChart, iosCategoryChart, enrichCategoryContext } from "./ios.js";
 import { androidLookup, androidSearch, androidTopChart, androidCategoryChart } from "./android.js";
-import { meetsSignalThreshold, rankBySignal } from "./signals.js";
+import { meetsSignalThreshold, rankBySignal, computeMomentum, categoryMedian } from "./signals.js";
 
 const REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
@@ -24,6 +24,67 @@ function matchesCategory(appCategory: string, query: string): boolean {
   return aliases.some(a => appCategory.toLowerCase().includes(a));
 }
 
+// ── Competitive context enrichment for single apps ─────────────────────────
+// enrichCategoryContext() only works on batches. For single lookups and search
+// results not in the chart corpus, we pull category peers from the warm chart
+// cache and compute median + relative_momentum from there.
+// This is always a cache read — no network calls added.
+
+async function enrichSingle(app: AppSignal): Promise<void> {
+  if (app.competitive_context.category_median_rating_velocity !== null) return;
+
+  try {
+    let peers: AppSignal[] = [];
+
+    if (app.platform === "ios") {
+      peers = await iosCategoryChart(app.category, 50);
+      if (peers.length === 0) {
+        const all = await iosTopChart(200);
+        peers = all.filter(a => a.category === app.category);
+      }
+    } else {
+      peers = await androidCategoryChart(app.category.toUpperCase(), 50);
+      if (peers.length === 0) {
+        const all = await androidTopChart(200);
+        peers = all.filter(a => a.category === app.category);
+      }
+    }
+
+    if (peers.length === 0) return;
+
+    const velocities = peers.map(p => p.rating.velocity_30d);
+    const median = categoryMedian(velocities);
+    app.competitive_context.category_median_rating_velocity = median;
+    app.competitive_context.relative_momentum = computeMomentum(app.rating.velocity_30d, median);
+  } catch {
+    // leave as null/unknown — better than throwing
+  }
+}
+
+async function enrichMany(apps: AppSignal[]): Promise<void> {
+  // Group by platform+category, fetch peers once per group
+  const groups = new Map<string, AppSignal[]>();
+  for (const app of apps) {
+    const key = `${app.platform}:${app.category}`;
+    const list = groups.get(key) ?? [];
+    list.push(app);
+    groups.set(key, list);
+  }
+
+  await Promise.allSettled(
+    [...groups.values()].map(group => enrichSingle(group[0]).then(() => {
+      // Apply the same median to all apps in this group
+      const median = group[0].competitive_context.category_median_rating_velocity;
+      for (const app of group) {
+        app.competitive_context.category_median_rating_velocity = median;
+        app.competitive_context.relative_momentum = computeMomentum(app.rating.velocity_30d, median);
+      }
+    }))
+  );
+}
+
+// ── Cache warm ─────────────────────────────────────────────────────────────
+
 export async function warmCache(): Promise<void> {
   console.log("[appsignal] Warming chart caches...");
   await Promise.allSettled([iosTopChart(100), androidTopChart(100)]);
@@ -37,6 +98,8 @@ export function startBackgroundRefresh(): void {
   }, REFRESH_INTERVAL_MS);
 }
 
+// ── Tool implementations ───────────────────────────────────────────────────
+
 export async function getAppSignal(
   appId: string,
   platform: "ios" | "android"
@@ -45,6 +108,10 @@ export async function getAppSignal(
     ? await iosLookup(appId)
     : await androidLookup(appId);
   if (!result) throw new Error(`App not found: ${appId} on ${platform}`);
+
+  // Enrich with category context from warm chart cache (cache read, no network)
+  await enrichSingle(result);
+
   return result;
 }
 
@@ -65,8 +132,14 @@ export async function searchApps(
     ...(android.status === "fulfilled" ? android.value : []),
   ];
 
-  // Enrich cross-platform competitive context across the combined result set
+  // First pass: enrich from within-batch peers (fast, no network)
   enrichCategoryContext(results);
+
+  // Second pass: for any still null, pull from chart cache
+  const stillNull = results.filter(
+    a => a.competitive_context.category_median_rating_velocity === null
+  );
+  if (stillNull.length > 0) await enrichMany(stillNull);
 
   return rankBySignal(results).slice(0, limit);
 }
@@ -110,11 +183,9 @@ export async function getCategoryLeaders(
     return all.filter(a => matchesCategory(a.category, category)).slice(0, limit);
   }
 
-  // iOS: use genre-specific RSS chart (Finance, Health, etc. have their own top charts)
   const specific = await iosCategoryChart(category, limit);
   if (specific.length > 0) return specific.slice(0, limit);
 
-  // Fallback: filter overall top chart
   const all = await iosTopChart(200);
   return all.filter(a => matchesCategory(a.category, category)).slice(0, limit);
 }

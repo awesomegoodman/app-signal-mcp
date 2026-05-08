@@ -1,16 +1,13 @@
 import { createRequire } from "module";
 import type { AppSignal } from "./types.js";
 import { Cache, recordSnapshot, getVelocity, getRankDelta } from "./cache.js";
-import { classifySignal, classifyConfidence, computeMomentum, categoryMedian } from "./signals.js";
+import { classifySignal, classifyConfidence } from "./signals.js";
 import { enrichCategoryContext } from "./ios.js";
 
-// ── Import fix: google-play-scraper is ESM with a default export ──────────
-// require() returns { __esModule: true, default: { app, list, search, ... } }
-// Using .default is mandatory — without it, every method is undefined and
-// calls silently fail, returning empty objects (null installs, 0 ratings, etc.)
+const _require = createRequire(import.meta.url);
+const _raw     = _require("google-play-scraper");
 
-const require = createRequire(import.meta.url);
-const gplay = require("google-play-scraper").default as {
+const gplay = (_raw.default ?? _raw) as {
   app:    (opts: { appId: string; lang?: string; country?: string }) => Promise<GplayApp>;
   search: (opts: { term: string; num: number; lang?: string; country?: string }) => Promise<GplayApp[]>;
   list:   (opts: { collection: string; category?: string; num: number; country?: string }) => Promise<GplayApp[]>;
@@ -18,14 +15,60 @@ const gplay = require("google-play-scraper").default as {
   category:   Record<string, string>;
 };
 
+const GENRE_TO_CATEGORY_ID: Record<string, string> = {
+  "health & fitness":     "HEALTH_AND_FITNESS",
+  "health":               "HEALTH_AND_FITNESS",
+  "medical":              "MEDICAL",
+  "finance":              "FINANCE",
+  "business":             "BUSINESS",
+  "productivity":         "PRODUCTIVITY",
+  "social":               "SOCIAL",
+  "communication":        "COMMUNICATION",
+  "entertainment":        "ENTERTAINMENT",
+  "music & audio":        "MUSIC_AND_AUDIO",
+  "music":                "MUSIC_AND_AUDIO",
+  "games":                "GAME",
+  "game":                 "GAME",
+  "travel & local":       "TRAVEL_AND_LOCAL",
+  "travel":               "TRAVEL_AND_LOCAL",
+  "food & drink":         "FOOD_AND_DRINK",
+  "food":                 "FOOD_AND_DRINK",
+  "education":            "EDUCATION",
+  "news & magazines":     "NEWS_AND_MAGAZINES",
+  "news":                 "NEWS_AND_MAGAZINES",
+  "sports":               "SPORTS",
+  "shopping":             "SHOPPING",
+  "lifestyle":            "LIFESTYLE",
+  "tools":                "TOOLS",
+  "utilities":            "TOOLS",
+  "photography":          "PHOTOGRAPHY",
+  "art & design":         "ART_AND_DESIGN",
+  "maps & navigation":    "MAPS_AND_NAVIGATION",
+  "navigation":           "MAPS_AND_NAVIGATION",
+  "auto & vehicles":      "AUTO_AND_VEHICLES",
+  "house & home":         "HOUSE_AND_HOME",
+  "books & reference":    "BOOKS_AND_REFERENCE",
+  "comics":               "COMICS",
+  "dating":               "DATING",
+  "events":               "EVENTS",
+  "libraries & demo":     "LIBRARIES_AND_DEMO",
+  "parenting":            "PARENTING",
+  "personalization":      "PERSONALIZATION",
+  "weather":              "WEATHER",
+  "video players":        "VIDEO_PLAYERS",
+};
+
+function toCategoryId(genre: string): string {
+  return GENRE_TO_CATEGORY_ID[genre.toLowerCase()] ?? genre.toUpperCase().replace(/ & /g, "_AND_").replace(/ /g, "_");
+}
 interface GplayApp {
   appId:     string;
   title:     string;
   developer: string;
   score:     number;
-  ratings:   number;   // total rating count
-  installs:  string;   // e.g. "1,000,000+" (string label from Play Store)
-  genre:     string;   // category name
+  ratings:   number;   // only populated by gplay.app()
+  installs:  string;   // only populated by gplay.app()
+  genre:     string;   // only populated by gplay.app()
   genreId:   string;
 }
 
@@ -35,14 +78,35 @@ const TTL_CHARTS = 60 * 60 * 1000;
 const lookupCache = new Cache<AppSignal>();
 const chartCache  = new Cache<AppSignal[]>();
 
-// ── Rate limiter: 1 req/sec ───────────────────────────────────────────────
+// ── Rate limiter ──────────────────────────────────────────────────────────
 
 let lastRequestMs = 0;
-async function rateLimitedFetch<T>(fn: () => Promise<T>): Promise<T> {
-  const wait = Math.max(0, 1000 - (Date.now() - lastRequestMs));
+async function throttle(): Promise<void> {
+  const wait = Math.max(0, 200 - (Date.now() - lastRequestMs));
   if (wait > 0) await new Promise(r => setTimeout(r, wait));
   lastRequestMs = Date.now();
-  return fn();
+}
+
+// ── Batch enrichment ──────────────────────────────────────────────────────
+// gplay.list() only returns title/score/developer — no ratings, installs, genre.
+// We enrich by calling gplay.app() for each ID in parallel batches of 5.
+
+async function enrichBatch(appIds: string[]): Promise<Map<string, GplayApp>> {
+  const result = new Map<string, GplayApp>();
+  const BATCH  = 5;
+
+  for (let i = 0; i < appIds.length; i += BATCH) {
+    const batch = appIds.slice(i, i + BATCH);
+    await throttle();
+    const settled = await Promise.allSettled(
+      batch.map(appId => gplay.app({ appId, lang: "en", country: "us" }))
+    );
+    settled.forEach((r, idx) => {
+      if (r.status === "fulfilled") result.set(batch[idx], r.value);
+    });
+  }
+
+  return result;
 }
 
 // ── Core builder ──────────────────────────────────────────────────────────
@@ -88,9 +152,8 @@ export async function androidLookup(appId: string): Promise<AppSignal | null> {
   if (cached) return cached;
 
   try {
-    const app = await rateLimitedFetch(() =>
-      gplay.app({ appId, lang: "en", country: "us" })
-    );
+    await throttle();
+    const app = await gplay.app({ appId, lang: "en", country: "us" });
     const key = `android:${app.appId}`;
     recordSnapshot(key, { rating_count: app.ratings, rank: null, captured_at: Date.now() });
 
@@ -100,7 +163,8 @@ export async function androidLookup(appId: string): Promise<AppSignal | null> {
     const signal = buildAppSignal(app, null, key);
     lookupCache.set(cacheKey, signal, TTL_LOOKUP);
     return signal;
-  } catch {
+  } catch (err) {
+    console.error("[android] lookup failed:", appId, (err as Error).message);
     return null;
   }
 }
@@ -111,24 +175,29 @@ export async function androidSearch(term: string, limit: number): Promise<AppSig
   if (cached) return cached as AppSignal[];
 
   try {
-    const apps = await rateLimitedFetch(() =>
-      gplay.search({ term, num: Math.min(limit, 30), lang: "en", country: "us" })
-    );
+    await throttle();
+    const partials = await gplay.search({ term, num: Math.min(limit, 30), lang: "en", country: "us" });
 
-    const signals = apps.map(app => {
-      const key = `android:${app.appId}`;
-      recordSnapshot(key, { rating_count: app.ratings, rank: null, captured_at: Date.now() });
+    // Enrich with full app data (ratings, installs, genre)
+    const appIds  = partials.map(p => p.appId);
+    const fullMap = await enrichBatch(appIds);
+
+    const signals = partials.map((partial, idx) => {
+      const full = fullMap.get(partial.appId) ?? partial;
+      const key  = `android:${full.appId}`;
+      recordSnapshot(key, { rating_count: full.ratings ?? 0, rank: null, captured_at: Date.now() });
       const chartVersion = lookupCache.get(key);
       if (chartVersion) return chartVersion;
-      const signal = buildAppSignal(app, null, key);
-      lookupCache.set(`android:${app.appId}`, signal, TTL_LOOKUP);
+      const signal = buildAppSignal(full, null, key);
+      lookupCache.set(key, signal, TTL_LOOKUP);
       return signal;
     });
 
     enrichCategoryContext(signals);
     (lookupCache as Cache<unknown>).set(cacheKey, signals, TTL_LOOKUP);
     return signals;
-  } catch {
+  } catch (err) {
+    console.error("[android] search failed:", term, (err as Error).message);
     return [];
   }
 }
@@ -139,55 +208,75 @@ export async function androidTopChart(limit = 100): Promise<AppSignal[]> {
   if (cached) return cached;
 
   try {
-    const apps = await rateLimitedFetch(() =>
-      gplay.list({ collection: gplay.collection.TOP_FREE, num: Math.min(limit, 200), country: "us" })
-    );
+    await throttle();
+    const partials = await gplay.list({
+      collection: gplay.collection.TOP_FREE,
+      num: Math.min(limit, 200),
+      country: "us",
+    });
 
-    const signals: AppSignal[] = apps.map((app, idx) => {
-      const rank = idx + 1;
-      const key  = `android:${app.appId}`;
-      recordSnapshot(key, { rating_count: app.ratings, rank, captured_at: Date.now() });
-      const signal = buildAppSignal(app, rank, key);
-      lookupCache.set(`android:${app.appId}`, signal, TTL_LOOKUP);
+    // Build rank map from list order
+    const rankMap = new Map(partials.map((p, i) => [p.appId, i + 1]));
+
+    // Enrich with full app data
+    const appIds  = partials.map(p => p.appId);
+    const fullMap = await enrichBatch(appIds);
+
+    const signals: AppSignal[] = partials.map(partial => {
+      const full = fullMap.get(partial.appId) ?? partial;
+      const rank = rankMap.get(full.appId) ?? null;
+      const key  = `android:${full.appId}`;
+      recordSnapshot(key, { rating_count: full.ratings ?? 0, rank, captured_at: Date.now() });
+      const signal = buildAppSignal(full, rank, key);
+      lookupCache.set(key, signal, TTL_LOOKUP);
       return signal;
     });
 
+    signals.sort((a, b) => (a.rank.current ?? 999) - (b.rank.current ?? 999));
     enrichCategoryContext(signals);
     chartCache.set(cacheKey, signals, TTL_CHARTS);
     return signals;
-  } catch {
+  } catch (err) {
+    console.error("[android] top chart failed:", (err as Error).message);
     return [];
   }
 }
 
 export async function androidCategoryChart(category: string, limit = 50): Promise<AppSignal[]> {
-  const cacheKey = `android:chart:${category}:${limit}`;
+  const categoryId = toCategoryId(category);
+  const cacheKey = `android:chart:${categoryId}:${limit}`;
   const cached = chartCache.get(cacheKey);
   if (cached) return cached;
 
   try {
-    const apps = await rateLimitedFetch(() =>
-      gplay.list({
-        collection: gplay.collection.TOP_FREE,
-        category,
-        num: Math.min(limit, 200),
-        country: "us",
-      })
-    );
+    await throttle();
+    const partials = await gplay.list({
+      collection: gplay.collection.TOP_FREE,
+      category: categoryId,
+      num: Math.min(limit, 200),
+      country: "us",
+    });
 
-    const signals: AppSignal[] = apps.map((app, idx) => {
-      const rank = idx + 1;
-      const key  = `android:${app.appId}`;
-      recordSnapshot(key, { rating_count: app.ratings, rank, captured_at: Date.now() });
-      const signal = buildAppSignal(app, rank, key);
-      lookupCache.set(`android:${app.appId}`, signal, TTL_LOOKUP);
+    const rankMap = new Map(partials.map((p, i) => [p.appId, i + 1]));
+    const appIds  = partials.map(p => p.appId);
+    const fullMap = await enrichBatch(appIds);
+
+    const signals: AppSignal[] = partials.map(partial => {
+      const full = fullMap.get(partial.appId) ?? partial;
+      const rank = rankMap.get(full.appId) ?? null;
+      const key  = `android:${full.appId}`;
+      recordSnapshot(key, { rating_count: full.ratings ?? 0, rank, captured_at: Date.now() });
+      const signal = buildAppSignal(full, rank, key);
+      lookupCache.set(key, signal, TTL_LOOKUP);
       return signal;
     });
 
+    signals.sort((a, b) => (a.rank.current ?? 999) - (b.rank.current ?? 999));
     enrichCategoryContext(signals);
     chartCache.set(cacheKey, signals, TTL_CHARTS);
     return signals;
-  } catch {
+  } catch (err) {
+    console.error("[android] category chart failed:", category, (err as Error).message);
     return [];
   }
 }
