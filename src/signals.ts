@@ -1,9 +1,5 @@
 import type { AppSignal, Confidence, GrowthSignal, Momentum } from "./types.js";
 
-// ── Signal Classifier ──────────────────────────────────────────────────────
-// Mirrors the spec exactly. Rank delta is a secondary signal used to
-// resolve ties at the margin.
-
 export function classifySignal(
   velocity: number | null,
   rankDelta: number | null,

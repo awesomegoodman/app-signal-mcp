@@ -7,6 +7,9 @@ import { enrichCategoryContext } from "./ios.js";
 const _require = createRequire(import.meta.url);
 const _raw     = _require("google-play-scraper");
 
+// require() behaviour differs by environment:
+//   CommonJS host → module exported directly (no .default)
+//   ESM interop   → { __esModule: true, default: {...} }
 const gplay = (_raw.default ?? _raw) as {
   app:    (opts: { appId: string; lang?: string; country?: string }) => Promise<GplayApp>;
   search: (opts: { term: string; num: number; lang?: string; country?: string }) => Promise<GplayApp[]>;
@@ -14,6 +17,10 @@ const gplay = (_raw.default ?? _raw) as {
   collection: { TOP_FREE: string };
   category:   Record<string, string>;
 };
+
+// ── Genre name → Play Store category ID ──────────────────────────────────
+// gplay.app() returns genre as a human label ("Health & Fitness").
+// gplay.list() requires the internal category ID ("HEALTH_AND_FITNESS").
 
 const GENRE_TO_CATEGORY_ID: Record<string, string> = {
   "health & fitness":     "HEALTH_AND_FITNESS",
@@ -279,4 +286,62 @@ export async function androidCategoryChart(category: string, limit = 50): Promis
     console.error("[android] category chart failed:", category, (err as Error).message);
     return [];
   }
+}
+
+// ── Google Play category ID mapping ───────────────────────────────────────
+// gplay.list() requires Google Play category IDs (e.g. HEALTH_AND_FITNESS),
+// not display names (e.g. "Health & Fitness"). This maps both display names
+// and common aliases to their correct Play Store category ID.
+
+const GPLAY_CATEGORY_IDS: Record<string, string> = {
+  // by display name (lowercased)
+  "art & design":           "ART_AND_DESIGN",
+  "auto & vehicles":        "AUTO_AND_VEHICLES",
+  "beauty":                 "BEAUTY",
+  "books & reference":      "BOOKS_AND_REFERENCE",
+  "business":               "BUSINESS",
+  "comics":                 "COMICS",
+  "communication":          "COMMUNICATION",
+  "dating":                 "DATING",
+  "education":              "EDUCATION",
+  "entertainment":          "ENTERTAINMENT",
+  "events":                 "EVENTS",
+  "finance":                "FINANCE",
+  "food & drink":           "FOOD_AND_DRINK",
+  "health & fitness":       "HEALTH_AND_FITNESS",
+  "house & home":           "HOUSE_AND_HOME",
+  "lifestyle":              "LIFESTYLE",
+  "maps & navigation":      "MAPS_AND_NAVIGATION",
+  "medical":                "MEDICAL",
+  "music & audio":          "MUSIC_AND_AUDIO",
+  "news & magazines":       "NEWS_AND_MAGAZINES",
+  "parenting":              "PARENTING",
+  "personalization":        "PERSONALIZATION",
+  "photography":            "PHOTOGRAPHY",
+  "productivity":           "PRODUCTIVITY",
+  "shopping":               "SHOPPING",
+  "social":                 "SOCIAL",
+  "sports":                 "SPORTS",
+  "tools":                  "TOOLS",
+  "travel & local":         "TRAVEL_AND_LOCAL",
+  "video players":          "VIDEO_PLAYERS",
+  "weather":                "WEATHER",
+  "games":                  "GAME",
+  "game":                   "GAME",
+  // common aliases
+  "health":                 "HEALTH_AND_FITNESS",
+  "fitness":                "HEALTH_AND_FITNESS",
+  "music":                  "MUSIC_AND_AUDIO",
+  "travel":                 "TRAVEL_AND_LOCAL",
+  "food":                   "FOOD_AND_DRINK",
+  "books":                  "BOOKS_AND_REFERENCE",
+  "news":                   "NEWS_AND_MAGAZINES",
+  "maps":                   "MAPS_AND_NAVIGATION",
+  "navigation":             "MAPS_AND_NAVIGATION",
+  "video":                  "VIDEO_PLAYERS",
+  "art":                    "ART_AND_DESIGN",
+};
+
+export function toGplayCategory(category: string): string {
+  return GPLAY_CATEGORY_IDS[category.toLowerCase()] ?? category.toUpperCase().replace(/ & /g, "_AND_").replace(/ /g, "_");
 }

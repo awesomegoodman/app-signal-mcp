@@ -1,6 +1,6 @@
 import type { AppSignal, GrowthSignal } from "./types.js";
 import { iosLookup, iosSearch, iosTopChart, iosCategoryChart, enrichCategoryContext } from "./ios.js";
-import { androidLookup, androidSearch, androidTopChart, androidCategoryChart } from "./android.js";
+import { androidLookup, androidSearch, androidTopChart, androidCategoryChart, toGplayCategory } from "./android.js";
 import { meetsSignalThreshold, rankBySignal, computeMomentum, categoryMedian } from "./signals.js";
 
 const REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -43,7 +43,7 @@ async function enrichSingle(app: AppSignal): Promise<void> {
         peers = all.filter(a => a.category === app.category);
       }
     } else {
-      peers = await androidCategoryChart(app.category.toUpperCase(), 50);
+      peers = await androidCategoryChart(toGplayCategory(app.category), 50);
       if (peers.length === 0) {
         const all = await androidTopChart(200);
         peers = all.filter(a => a.category === app.category);
@@ -177,7 +177,7 @@ export async function getCategoryLeaders(
   limit: number
 ): Promise<AppSignal[]> {
   if (platform === "android") {
-    const specific = await androidCategoryChart(category.toUpperCase(), limit);
+    const specific = await androidCategoryChart(toGplayCategory(category), limit);
     if (specific.length > 0) return specific.slice(0, limit);
     const all = await androidTopChart(200);
     return all.filter(a => matchesCategory(a.category, category)).slice(0, limit);
