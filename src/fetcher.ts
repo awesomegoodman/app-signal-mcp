@@ -1,6 +1,6 @@
 import type { AppSignal, GrowthSignal } from "./types.js";
 import { iosLookup, iosSearch, iosTopChart, iosCategoryChart, enrichCategoryContext } from "./ios.js";
-import { androidLookup, androidSearch, androidTopChart, androidCategoryChart, toGplayCategory } from "./android.js";
+import { androidLookup, androidSearch, androidTopChart, androidCategoryChart, toCategoryId } from "./android.js";
 import { meetsSignalThreshold, rankBySignal, computeMomentum, categoryMedian } from "./signals.js";
 
 const REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -37,7 +37,8 @@ async function enrichSingle(app: AppSignal): Promise<void> {
         peers = all.filter(a => a.category === app.category);
       }
     } else {
-      peers = await androidCategoryChart(toGplayCategory(app.category), 50);
+      const catId = toCategoryId(app.category);
+      if (catId) peers = await androidCategoryChart(catId, 50);
       if (peers.length === 0) {
         const all = await androidTopChart(200);
         peers = all.filter(a => a.category === app.category);
@@ -46,12 +47,12 @@ async function enrichSingle(app: AppSignal): Promise<void> {
 
     if (peers.length === 0) return;
 
-    const velocities = peers.map(p => p.rating.velocity_30d);
+    const velocities = peers.map(p => p.rating.velocity_30d).filter((v): v is number => v !== null);
     const median = categoryMedian(velocities);
     app.competitive_context.category_median_rating_velocity = median;
     app.competitive_context.relative_momentum = computeMomentum(app.rating.velocity_30d, median);
   } catch {
-    // Left as null/unknown — better than throwing
+    // leave as null/unknown — better than throwing
   }
 }
 
@@ -86,9 +87,24 @@ export async function warmCache(): Promise<void> {
 }
 
 export function startBackgroundRefresh(): void {
-  setInterval(async () => {
-    console.log("[appsignal] Background cache refresh...");
-    await Promise.allSettled([iosTopChart(100), androidTopChart(100)]);
+  setInterval(() => {
+    void (async () => {
+      try {
+        console.log("[appsignal] Background cache refresh...");
+
+        await Promise.allSettled([
+          iosTopChart(100),
+          androidTopChart(100),
+        ]);
+
+        console.log("[appsignal] Background refresh complete.");
+      } catch (err) {
+        console.error(
+          "[appsignal] refresh failed:",
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    })();
   }, REFRESH_INTERVAL_MS);
 }
 
@@ -171,7 +187,8 @@ export async function getCategoryLeaders(
   limit: number
 ): Promise<AppSignal[]> {
   if (platform === "android") {
-    const specific = await androidCategoryChart(toGplayCategory(category), limit);
+    const catId = toCategoryId(category);
+    const specific = catId ? await androidCategoryChart(catId, limit) : [];
     if (specific.length > 0) return specific.slice(0, limit);
     const all = await androidTopChart(200);
     return all.filter(a => matchesCategory(a.category, category)).slice(0, limit);

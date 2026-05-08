@@ -29,6 +29,17 @@ export interface AppSignal {
   data_freshness: string;       // ISO 8601
 }
 
+export interface GplayApp {
+  appId:     string;
+  title:     string;
+  developer: string;
+  score:     number;
+  ratings:   number;   // only populated by gplay.app()
+  installs:  string;   // only populated by gplay.app()
+  genre:     string;   // only populated by gplay.app()
+  genreId:   string;
+}
+
 export interface Snapshot {
   rating_count: number;
   rank: number | null;
